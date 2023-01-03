@@ -4,9 +4,13 @@
 require('dotenv').config()
 
 const fs = require('fs')
+const path = require('path')
 const http = require('http')
 const { createApi } = require('unsplash-js')
 const { default: fetch } = require('node-fetch')
+const { pipeline } = require('stream')
+const { promisify } = require('util')
+// const sharp = require('sharp')
 
 const unsplash = createApi({
   accessKey: process.env.UNSPLASH_API_ACCESS_KEY,
@@ -36,12 +40,68 @@ async function searchImage(query) {
   }
 }
 
-const server = http.createServer((req, res) => {
-  async function main() {
-    const result = await searchImage('mountain')
+/**
+ * 
+ * 이미지를 Unsplash에서 검색하거나, 이미 있다면 캐시된 이미지를 리턴합니다.
+ * @param {string} query
+ */
+async function getCachedImageOrSearchedImage(query){
+    const imageFilePath = path.resolve(__dirname,`../images/${query}`)
+
+    
+    if(fs.existsSync(imageFilePath)){
+        return{
+            message: `Returning cached image: ${query}`,
+            stream: fs.createReadStream(imageFilePath)
+    }
+        
+    }
+
+
+    const result = await searchImage(query)
     const resp = await fetch(result.url)
 
-    resp.body.pipe(res)
+    
+    resp.body.pipe(fs.createWriteStream(imageFilePath))
+
+    await promisify(pipeline)(
+        resp.body, 
+        fs.createWriteStream(imageFilePath)
+    )
+    
+    return {
+        message: `Returning new image: ${query}`,
+        stream: fs.createReadStream(imageFilePath)
+    }
+}
+
+/**
+ * 
+ * @param {string} url
+ */
+function convertURLToQueryKeyword(url){
+    return url.slice(1)
+}
+
+const server = http.createServer((req, res) => {
+  async function main() {
+    if(!req.url){
+        res.statusCode = 400
+        res.end('Needs URL.')
+        return
+    }
+    
+    const query = convertURLToQueryKeyword(req.url)
+
+    try{
+        const { message, stream } = await getCachedImageOrSearchedImage(query)
+        console.log(message)
+        stream.pipe(res)
+    } catch {
+        res.statusCode = 400
+        res.end()
+    }
+    
   }
 
   main()

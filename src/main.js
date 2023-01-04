@@ -10,7 +10,8 @@ const { createApi } = require('unsplash-js')
 const { default: fetch } = require('node-fetch')
 const { pipeline } = require('stream')
 const { promisify } = require('util')
-// const sharp = require('sharp')
+const sharp = require('sharp')
+const { default: imageSize } = require('image-size')
 
 const unsplash = createApi({
   accessKey: process.env.UNSPLASH_API_ACCESS_KEY,
@@ -68,9 +69,11 @@ async function getCachedImageOrSearchedImage(query){
         resp.body, 
         fs.createWriteStream(imageFilePath)
     )
+
+    const size = imageSize(imageFilePath)
     
     return {
-        message: `Returning new image: ${query}`,
+        message: `Returning new image: ${query}, ${size.width}, ${size.height}`,
         stream: fs.createReadStream(imageFilePath)
     }
 }
@@ -79,8 +82,30 @@ async function getCachedImageOrSearchedImage(query){
  * 
  * @param {string} url
  */
-function convertURLToQueryKeyword(url){
-    return url.slice(1)
+function convertURLToImageInfo(url){
+    const urlObj = new URL(url, 'http://localhost:5000')
+
+    /**
+     * 
+     * @param {string} name 
+     * @param {number} defaultValue
+     * @returns 
+     */
+    function getSearchParam(name, defaultValue){
+        const str = urlObj.searchParams.get(name)
+        return str ? parseInt(str, 10) : defaultValue
+    }
+
+    const width = getSearchParam('width', 400)
+    const height = getSearchParam('height', 400)
+
+  
+
+    return {
+        query: urlObj.pathname.slice(1),
+        width,
+        height
+    }
 }
 
 const server = http.createServer((req, res) => {
@@ -91,11 +116,23 @@ const server = http.createServer((req, res) => {
         return
     }
     
-    const query = convertURLToQueryKeyword(req.url)
+    const { query, width, height } = convertURLToImageInfo(req.url)
 
     try{
         const { message, stream } = await getCachedImageOrSearchedImage(query)
+        
         console.log(message)
+
+        await promisify(pipeline)(
+            stream,
+            sharp().resize(width, height, {
+                fit: 'cover',
+
+            }).png(),
+            res,
+        )
+
+        
         stream.pipe(res)
     } catch {
         res.statusCode = 400
